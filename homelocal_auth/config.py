@@ -2,7 +2,7 @@
 Authentication configuration.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class AuthConfig:
         expected_issuer: Expected issuer value if verify_issuer is True
         verify_audience: Whether to verify the 'aud' claim (default: False for backwards compat)
         expected_audience: Expected audience value if verify_audience is True
-        algorithms: Allowed JWT algorithms (default: ["RS256"])
+        algorithms: Allowed JWT algorithms (default: ("RS256",))
 
     Example:
         config = AuthConfig(
@@ -36,7 +36,7 @@ class AuthConfig:
     expected_issuer: str | None = None
     verify_audience: bool = False
     expected_audience: str | None = None
-    algorithms: list[str] = field(default_factory=lambda: ["RS256"])
+    algorithms: tuple[str, ...] = ("RS256",)
 
     def __post_init__(self) -> None:
         """Validate configuration."""
