@@ -17,7 +17,7 @@ Usage:
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, status
 
@@ -240,5 +240,115 @@ def optional_claims(
             return await verify_bearer_token(authorization, config)
         except AuthenticationError:
             return None
+
+    return dependency
+
+
+def require_claim(
+    config: AuthConfig,
+    claim_name: str,
+    allowed_values: Sequence[Any],
+) -> Callable[..., TokenClaims]:
+    """
+    Create a FastAPI dependency that requires a specific claim to have one of the allowed values.
+
+    Returns TokenClaims if the token is valid AND the claim has an allowed value.
+    Raises 401 for invalid/missing token, 403 for invalid claim value.
+
+    Args:
+        config: Authentication configuration
+        claim_name: Name of the claim to check
+        allowed_values: List of acceptable values for the claim
+
+    Returns:
+        FastAPI dependency function
+
+    Example:
+        require_verified = require_claim(config, "address_verified", [True])
+
+        @app.get("/api/verified-only")
+        async def verified_endpoint(claims: TokenClaims = Depends(require_verified)):
+            return {"user_id": claims.sub}
+    """
+    _require_claims = require_claims(config)
+
+    async def dependency(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TokenClaims:
+        claims = await _require_claims(authorization)
+
+        value = claims.get_claim(claim_name)
+        if value not in allowed_values:
+            logger.warning(
+                f"User {claims.sub} has invalid claim '{claim_name}': {value} not in {list(allowed_values)}"
+            )
+            raise _forbidden_exception(
+                f"Claim '{claim_name}' must be one of: {list(allowed_values)}"
+            )
+
+        return claims
+
+    return dependency
+
+
+def require_business_with_status(
+    config: AuthConfig,
+    allowed_statuses: Sequence[str] | None = None,
+) -> Callable[..., TokenClaims]:
+    """
+    Create a FastAPI dependency that requires business account type with optional status check.
+
+    Checks both account_type claim (preferred) and business role (backward compatibility).
+    If allowed_statuses is provided, also verifies business_status claim.
+
+    Args:
+        config: Authentication configuration
+        allowed_statuses: List of allowed business_status values.
+                         If None, any business account is accepted.
+
+    Returns:
+        FastAPI dependency function
+
+    Examples:
+        # Any business account (pending, approved, etc.)
+        require_any_business = require_business_with_status(config)
+
+        # Only approved businesses
+        require_approved = require_business_with_status(config, ["approved"])
+
+        # Pending or approved (can create drafts)
+        require_active = require_business_with_status(config, ["pending_approval", "approved"])
+
+        @app.post("/api/listings")
+        async def create_listing(claims: TokenClaims = Depends(require_active)):
+            return {"created_by": claims.sub}
+    """
+    _require_claims = require_claims(config)
+
+    async def dependency(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TokenClaims:
+        claims = await _require_claims(authorization)
+
+        # Check account_type OR role (for backward compatibility)
+        account_type = claims.get_claim("account_type")
+        has_business_role = claims.has_role("business")
+
+        if account_type != "business" and not has_business_role:
+            logger.warning(f"User {claims.sub} is not a business account")
+            raise _forbidden_exception("Business account required")
+
+        # Check status if specified
+        if allowed_statuses is not None:
+            status = claims.get_claim("business_status")
+            if status not in allowed_statuses:
+                logger.warning(
+                    f"User {claims.sub} has business_status '{status}', required: {list(allowed_statuses)}"
+                )
+                raise _forbidden_exception(
+                    f"Business account must have status: {list(allowed_statuses)}"
+                )
+
+        return claims
 
     return dependency

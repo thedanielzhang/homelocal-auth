@@ -14,7 +14,7 @@ Reusable JWT authentication library for Home.Local FastAPI services.
 
 ```bash
 # From private PyPI
-pip install homelocal-auth==0.1.0
+pip install homelocal-auth==0.2.0
 
 # Or with pip index URL
 pip install homelocal-auth --index-url https://pypi.homelocal.internal/simple/
@@ -74,6 +74,8 @@ config = AuthConfig(
 | `require_role(config, "role")` | Requires specific role |
 | `require_any_role(config, ["a", "b"])` | Requires any of the roles |
 | `optional_claims(config)` | Returns `TokenClaims | None`, doesn't raise |
+| `require_claim(config, "claim", [values])` | Requires specific claim value |
+| `require_business_with_status(config, statuses)` | Requires business account with optional status check |
 
 ### TokenClaims
 
@@ -95,6 +97,50 @@ claims.has_all_roles(["dev", "business"])  # bool
 claims.is_admin                    # bool (property)
 claims.is_developer                # bool (property)
 claims.get_claim("custom_field")   # Any
+```
+
+### Business Authorization
+
+For business account workflows, use `require_business_with_status()` to check both account type and approval status:
+
+```python
+from homelocal_auth import AuthConfig, require_business_with_status
+
+config = AuthConfig(jwks_url="https://auth.example.com/.well-known/jwks.json")
+
+# Any business account (pending, approved, etc.)
+require_any_business = require_business_with_status(config)
+
+# Only approved businesses
+require_approved = require_business_with_status(config, ["approved"])
+
+# Pending or approved (can create drafts, but not publish)
+require_active = require_business_with_status(config, ["pending_approval", "approved"])
+
+@app.post("/api/listings")
+async def create_listing(claims: TokenClaims = Depends(require_active)):
+    """Pending businesses can create drafts, approved can publish."""
+    return {"created_by": claims.sub, "status": claims.get_claim("business_status")}
+```
+
+The function checks:
+1. `account_type == "business"` claim (preferred), OR
+2. `"business"` in `roles` claim (backward compatibility)
+3. If `allowed_statuses` is provided, also checks `business_status` claim
+
+### Claim-Based Authorization
+
+For custom claim checks, use `require_claim()`:
+
+```python
+from homelocal_auth import require_claim
+
+# Require address verification
+require_verified = require_claim(config, "address_verified", [True])
+
+@app.get("/api/verified-only")
+async def verified_endpoint(claims: TokenClaims = Depends(require_verified)):
+    return {"user_id": claims.sub}
 ```
 
 ### User Resolution (Database Integration)

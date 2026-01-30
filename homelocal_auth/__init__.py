@@ -20,8 +20,11 @@ from homelocal_auth.claims import TokenClaims
 from homelocal_auth.config import AuthConfig
 from homelocal_auth.core import AuthenticationError, verify_bearer_token
 from homelocal_auth.fastapi import (
+    optional_claims,
     require_admin,
     require_any_role,
+    require_business_with_status,
+    require_claim,
     require_claims,
     require_developer,
     require_role,
@@ -29,7 +32,7 @@ from homelocal_auth.fastapi import (
 from homelocal_auth.jwks import JWKSClient
 from homelocal_auth.resolvers import UserResolver, UserResolverFunc
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     # Config
@@ -47,6 +50,9 @@ __all__ = [
     "require_any_role",
     "require_developer",
     "require_admin",
+    "optional_claims",
+    "require_claim",
+    "require_business_with_status",
     # Resolvers
     "UserResolver",
     "UserResolverFunc",

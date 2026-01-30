@@ -16,6 +16,8 @@ from homelocal_auth import (
     TokenClaims,
     require_admin,
     require_any_role,
+    require_business_with_status,
+    require_claim,
     require_claims,
     require_developer,
     require_role,
@@ -312,4 +314,401 @@ def test_invalid_token_format(client):
 def test_invalid_auth_scheme(client):
     """Test invalid auth scheme returns 401."""
     response = client.get("/protected", headers={"Authorization": "Basic dXNlcjpwYXNz"})
+    assert response.status_code == 401
+
+
+# =============================================================================
+# Tests for require_claim()
+# =============================================================================
+
+
+@pytest.fixture
+def app_with_claim_checks(config):
+    """Create test FastAPI app with require_claim endpoints."""
+    app = FastAPI()
+
+    @app.get("/verified")
+    async def verified(
+        claims: TokenClaims = Depends(require_claim(config, "address_verified", [True]))
+    ):
+        return {"user_id": claims.sub, "verified": True}
+
+    @app.get("/active-status")
+    async def active_status(
+        claims: TokenClaims = Depends(
+            require_claim(config, "business_status", ["pending_approval", "approved"])
+        )
+    ):
+        return {"user_id": claims.sub, "status": claims.get_claim("business_status")}
+
+    return app
+
+
+@pytest.fixture
+def client_claim_checks(app_with_claim_checks):
+    """Create test client for claim check tests."""
+    return TestClient(app_with_claim_checks)
+
+
+@respx.mock
+def test_require_claim_with_matching_value(client_claim_checks):
+    """Test require_claim allows matching value."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "address_verified": True,
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_claim_checks.get(
+        "/verified",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"user_id": "user-123", "verified": True}
+
+
+@respx.mock
+def test_require_claim_with_non_matching_value(client_claim_checks):
+    """Test require_claim returns 403 for non-matching value."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "address_verified": False,
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_claim_checks.get(
+        "/verified",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+    assert "address_verified" in response.json()["detail"]
+
+
+@respx.mock
+def test_require_claim_with_missing_claim(client_claim_checks):
+    """Test require_claim returns 403 when claim is missing."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_claim_checks.get(
+        "/verified",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+
+
+@respx.mock
+def test_require_claim_with_one_of_allowed_values(client_claim_checks):
+    """Test require_claim allows any of the allowed values."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    # Test with "pending_approval"
+    token1 = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "business_status": "pending_approval",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response1 = client_claim_checks.get(
+        "/active-status",
+        headers={"Authorization": f"Bearer {token1}"}
+    )
+    assert response1.status_code == 200
+    assert response1.json()["status"] == "pending_approval"
+
+    # Test with "approved"
+    token2 = create_test_token({
+        "sub": "user-456",
+        "roles": ["default"],
+        "business_status": "approved",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response2 = client_claim_checks.get(
+        "/active-status",
+        headers={"Authorization": f"Bearer {token2}"}
+    )
+    assert response2.status_code == 200
+    assert response2.json()["status"] == "approved"
+
+
+@respx.mock
+def test_require_claim_rejects_non_allowed_value(client_claim_checks):
+    """Test require_claim rejects values not in allowed list."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "business_status": "suspended",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_claim_checks.get(
+        "/active-status",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+    assert "business_status" in response.json()["detail"]
+
+
+# =============================================================================
+# Tests for require_business_with_status()
+# =============================================================================
+
+
+@pytest.fixture
+def app_with_business_status(config):
+    """Create test FastAPI app with require_business_with_status endpoints."""
+    app = FastAPI()
+
+    @app.get("/any-business")
+    async def any_business(
+        claims: TokenClaims = Depends(require_business_with_status(config))
+    ):
+        return {
+            "user_id": claims.sub,
+            "account_type": claims.get_claim("account_type"),
+            "business_status": claims.get_claim("business_status"),
+        }
+
+    @app.get("/approved-business")
+    async def approved_business(
+        claims: TokenClaims = Depends(
+            require_business_with_status(config, ["approved"])
+        )
+    ):
+        return {"user_id": claims.sub, "approved": True}
+
+    @app.get("/active-business")
+    async def active_business(
+        claims: TokenClaims = Depends(
+            require_business_with_status(config, ["pending_approval", "approved"])
+        )
+    ):
+        return {
+            "user_id": claims.sub,
+            "status": claims.get_claim("business_status"),
+        }
+
+    return app
+
+
+@pytest.fixture
+def client_business_status(app_with_business_status):
+    """Create test client for business status tests."""
+    return TestClient(app_with_business_status)
+
+
+@respx.mock
+def test_require_business_with_account_type(client_business_status):
+    """Test require_business_with_status allows business account_type."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "account_type": "business",
+        "business_status": "pending_approval",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/any-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["account_type"] == "business"
+
+
+@respx.mock
+def test_require_business_with_business_role_backward_compat(client_business_status):
+    """Test require_business_with_status allows business role (backward compat)."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    # Token with business role but no account_type (legacy token)
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "business_status": "approved",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/any-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+
+
+@respx.mock
+def test_require_business_rejects_personal_account(client_business_status):
+    """Test require_business_with_status rejects personal accounts."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default"],
+        "account_type": "personal",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/any-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+    assert "business account required" in response.json()["detail"].lower()
+
+
+@respx.mock
+def test_require_business_approved_allows_approved(client_business_status):
+    """Test require_business_with_status(['approved']) allows approved businesses."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "account_type": "business",
+        "business_status": "approved",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/approved-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["approved"] is True
+
+
+@respx.mock
+def test_require_business_approved_rejects_pending(client_business_status):
+    """Test require_business_with_status(['approved']) rejects pending businesses."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "account_type": "business",
+        "business_status": "pending_approval",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/approved-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+    assert "status" in response.json()["detail"].lower()
+
+
+@respx.mock
+def test_require_business_active_allows_pending(client_business_status):
+    """Test require_business_with_status(['pending_approval', 'approved']) allows pending."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "account_type": "business",
+        "business_status": "pending_approval",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/active-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending_approval"
+
+
+@respx.mock
+def test_require_business_active_allows_approved(client_business_status):
+    """Test require_business_with_status(['pending_approval', 'approved']) allows approved."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "account_type": "business",
+        "business_status": "approved",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/active-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+
+
+@respx.mock
+def test_require_business_active_rejects_suspended(client_business_status):
+    """Test require_business_with_status(['pending_approval', 'approved']) rejects suspended."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    token = create_test_token({
+        "sub": "user-123",
+        "roles": ["default", "business"],
+        "account_type": "business",
+        "business_status": "suspended",
+        "exp": int(time.time()) + 3600,
+    })
+
+    response = client_business_status.get(
+        "/active-business",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+
+
+@respx.mock
+def test_require_business_no_auth(client_business_status):
+    """Test require_business_with_status returns 401 without auth."""
+    respx.get("https://auth.test.com/.well-known/jwks.json").mock(
+        return_value=Response(200, json=TEST_JWKS)
+    )
+
+    response = client_business_status.get("/any-business")
     assert response.status_code == 401
