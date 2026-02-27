@@ -70,6 +70,21 @@ class TokenClaims:
         """Get a custom claim from the raw payload."""
         return self.raw_payload.get(key, default)
 
+    @property
+    def token_type(self) -> str:
+        """Get the token type (defaults to 'access' for regular tokens)."""
+        return self.raw_payload.get("type", "access")
+
+    @property
+    def is_deployment_token(self) -> bool:
+        """Check if this is a deployment token."""
+        return self.token_type == "deployment"
+
+    @property
+    def deployment_permissions(self) -> list[str]:
+        """Get deployment permissions from the token payload."""
+        return self.raw_payload.get("permissions", [])
+
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "TokenClaims":
         """
