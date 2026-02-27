@@ -26,13 +26,14 @@ from homelocal_auth.fastapi import (
     require_business_with_status,
     require_claim,
     require_claims,
+    require_deployment_token,
     require_developer,
     require_role,
 )
 from homelocal_auth.jwks import JWKSClient
 from homelocal_auth.resolvers import UserResolver, UserResolverFunc
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     # Config
@@ -53,6 +54,7 @@ __all__ = [
     "optional_claims",
     "require_claim",
     "require_business_with_status",
+    "require_deployment_token",
     # Resolvers
     "UserResolver",
     "UserResolverFunc",
