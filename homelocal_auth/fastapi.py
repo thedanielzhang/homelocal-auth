@@ -291,6 +291,44 @@ def require_claim(
     return dependency
 
 
+def require_deployment_token(
+    config: AuthConfig,
+) -> Callable[..., TokenClaims]:
+    """
+    Create a FastAPI dependency that requires a valid deployment token.
+
+    Validates that the JWT has type="deployment" in its claims.
+    Raises 401 for invalid/missing token, 403 if token is not a deployment token.
+
+    Args:
+        config: Authentication configuration
+
+    Returns:
+        FastAPI dependency function
+
+    Example:
+        require_deploy = require_deployment_token(config)
+
+        @app.post("/webhooks/sync")
+        async def receive_sync(claims: TokenClaims = Depends(require_deploy)):
+            return {"app_id": claims.get_claim("app_id")}
+    """
+    _require_claims = require_claims(config)
+
+    async def dependency(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> TokenClaims:
+        claims = await _require_claims(authorization)
+
+        if not claims.is_deployment_token:
+            logger.warning(f"Token type '{claims.token_type}' is not a deployment token")
+            raise _forbidden_exception("Deployment token required")
+
+        return claims
+
+    return dependency
+
+
 def require_business_with_status(
     config: AuthConfig,
     allowed_statuses: Sequence[str] | None = None,
